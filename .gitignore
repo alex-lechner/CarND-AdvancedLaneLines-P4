@@ -93,9 +93,7 @@ ENV/
 # Rope project settings
 .ropeproject
 
-/camera_cal
 /examples
-/test_images
 challenge_video.mp4
 example_writeup.pdf
 harder_challenge_video.mp4
