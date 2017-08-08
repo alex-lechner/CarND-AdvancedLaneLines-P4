@@ -4,6 +4,7 @@ import cv2
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle
 
 # Arrays to store object points and image points from all images
 # objpoints = 3D points in real world space; imgpoints = 2D points in image plane;
@@ -27,15 +28,16 @@ def camera_calibration(folder, nx=9, ny=6):
             imgpoints.append(corners)
             objpoints.append(objp)
 
-            image = cal_undistort(image, objpoints, imgpoints)
-            # image = cv2.drawChessboardCorners(image, (nx, ny), corners, ret)
-            plt.imshow(image)
-            plt.show()
+            # image = cal_undistort(image, objpoints, imgpoints)
+            image = cv2.drawChessboardCorners(image, (nx, ny), corners, ret)
+            mpimg.imsave("output_images/chessboard_corners.jpg", image)
 
 
 def cal_undistort(img, object_points, image_points):
     img_size = (img.shape[1], img.shape[0])
     ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(object_points, image_points, img_size, None, None)
+    calibration = {"mtx": mtx, "dist": dist}
+    pickle.dump(calibration, open("calibration.p", "wb"))
     undist = cv2.undistort(img, mtx, dist, None, mtx)
     return undist
 
