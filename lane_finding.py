@@ -1,17 +1,20 @@
 import glob
+import pickle
+from pathlib import Path
 
 import cv2
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
-import pickle
 
-# Arrays to store object points and image points from all images
-# objpoints = 3D points in real world space; imgpoints = 2D points in image plane;
-objpoints, imgpoints = [], []
+from Line import Line
 
 
 def camera_calibration(folder, nx=9, ny=6):
+    # Arrays to store object points and image points from all images
+    # objpoints = 3D points in real world space; imgpoints = 2D points in image plane;
+    objpoints, imgpoints = [], []
+
     objp = np.zeros((nx * ny, 3), np.float32)
     objp[:, :2] = np.mgrid[0:nx, 0:ny].T.reshape(-1, 2)
 
@@ -32,14 +35,11 @@ def camera_calibration(folder, nx=9, ny=6):
             chessboard_image = cv2.drawChessboardCorners(image, (nx, ny), corners, ret)
             mpimg.imsave("output_images/chessboard_" + image_name, chessboard_image)
 
-            undistorted_image = cal_undistort(image, objpoints, imgpoints)
-            mpimg.imsave("output_images/undistorted_" + image_name, undistorted_image)
-
-            warped_image = warper(undistorted_image)
-            mpimg.imsave("output_images/warped_" + image_name, warped_image)
+        undistorted_image = undistort_calibration(image, objpoints, imgpoints)
+        mpimg.imsave("output_images/undistorted_" + image_name, undistorted_image)
 
 
-def cal_undistort(img, object_points, image_points):
+def undistort_calibration(img, object_points, image_points):
     img_size = (img.shape[1], img.shape[0])
     ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(object_points, image_points, img_size, None, None)
     calibration = {"mtx": mtx, "dist": dist}
@@ -66,17 +66,18 @@ def warper(img):
     return warped, M, Minv
 
 
-def abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(0, 255)):
+def abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(0, 255), convert_gray=False):
     # Apply the following steps to img
-    # 1) Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    # 1) Convert to grayscale if convert_gray is True
+    if convert_gray:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     # 2) Take the derivative in x or y given orient = 'x' or 'y'
     if orient.lower() == 'x':
-        sobel = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+        sobel = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
     elif orient.lower() == 'y':
-        sobel = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+        sobel = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
     else:
-        raise ValueError('Error: Please insert x or y for orientation')
+        raise ValueError('Error: Please insert \'x\' or \'y\' for orientation')
     # 3) Take the absolute value of the derivative or gradient
     abs_sobel = np.absolute(sobel)
     # 4) Scale to 8-bit (0 - 255) then convert to type = np.uint8
@@ -89,12 +90,13 @@ def abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(0, 255)):
     return grad_binary
 
 
-def mag_thresh(img, sobel_kernel=3, thresh=(0, 255)):
-    # 1) Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+def mag_thresh(img, sobel_kernel=3, thresh=(0, 255), convert_gray=False):
+    # 1) Convert to grayscale if convert_gray is True
+    if convert_gray:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     # 2) Take the gradient in x and y separately
-    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-    sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+    sobelx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+    sobely = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
     # 3) Calculate the magnitude
     gradmag = np.sqrt(sobelx ** 2 + sobely ** 2)
     # 4) Scale to 8-bit (0 - 255) and convert to type = np.uint8
@@ -107,12 +109,13 @@ def mag_thresh(img, sobel_kernel=3, thresh=(0, 255)):
     return mag_binary
 
 
-def dir_threshold(img, sobel_kernel=3, thresh=(0, np.pi / 2)):
-    # 1) Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+def dir_threshold(img, sobel_kernel=3, thresh=(0, np.pi / 2), convert_gray=False):
+    # 1) Convert to grayscale if convert_gray is True
+    if convert_gray:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     # 2) Take the gradient in x and y separately
-    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-    sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+    sobelx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+    sobely = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
     # 3) Take the absolute value of the x and y gradients
     abs_sobelx = np.absolute(sobelx)
     abs_sobely = np.absolute(sobely)
@@ -125,62 +128,58 @@ def dir_threshold(img, sobel_kernel=3, thresh=(0, np.pi / 2)):
     return dir_binary
 
 
-def hls_threshold(img, thresh=(0, 255)):
+def hls_threshold(img, channel='s', thresh=(0, 255)):
     # 1) Convert to HLS color space
     hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-    # 2) Apply a threshold to the S channel
-    S = hls[:, :, 2]
-    hls_binary = np.zeros_like(S)
-    # 3) Return a binary image of threshold result
-    hls_binary[(S > thresh[0]) & (S <= thresh[1])] = 1
+    # 2) Select a channel
+    if channel.lower() == 'h':
+        color_channel = hls[:, :, 0]
+    elif channel.lower() == 'l':
+        color_channel = hls[:, :, 1]
+    elif channel.lower() == 's':
+        color_channel = hls[:, :, 2]
+    else:
+        raise ValueError('Error: Please insert \'h\', \'l\' or \'s\' for channel')
+    hls_binary = np.zeros_like(color_channel)
+    # 3) Apply a threshold to the S channel
+    hls_binary[(color_channel > thresh[0]) & (color_channel <= thresh[1])] = 1
+    # 4) Return a binary image of threshold result
     return hls_binary
 
 
+def combined_threshold(img, kernel_size=3):
+    # Apply each of the thresholding functions
+    gradx = abs_sobel_thresh(img, orient='x', sobel_kernel=kernel_size)
+    grady = abs_sobel_thresh(img, orient='y', sobel_kernel=kernel_size)
+    mag_binary = mag_thresh(img, sobel_kernel=kernel_size)
+    dir_binary = dir_threshold(img, sobel_kernel=kernel_size)
+    hls_binary = hls_threshold(img)
+
+    combined = np.zeros_like(dir_binary)
+    combined[((gradx == 1) & (grady == 1)) | ((mag_binary == 1) & (dir_binary == 1))] = 1
+
+    color_binary = np.dstack((np.zeros_like(combined), combined, hls_binary))
+    return color_binary
 
 
-# Choose a Sobel kernel size
-ksize = 3
+def hls_with_sobelx(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
+    img = np.copy(img)
+    # Convert to HSV color space and separate the V channel
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
+    l_channel = hsv[:, :, 1]
+    s_channel = hsv[:, :, 2]
+    # Sobel x
+    sxbinary = abs_sobel_thresh(l_channel, orient='x', thresh=sx_thresh)
 
-# Apply each of the thresholding functions
-# gradx = abs_sobel_thresh(image, orient='x', sobel_kernel=ksize, thresh=(0, 255))
-# grady = abs_sobel_thresh(image, orient='y', sobel_kernel=ksize, thresh=(0, 255))
-# mag_binary = mag_thresh(image, sobel_kernel=ksize, thresh=(0, 255))
-# dir_binary = dir_threshold(image, sobel_kernel=ksize, thresh=(0, np.pi / 2))
-# hls_binary = hls_threshold(image, thresh=(0, 255))
-#
-# combined = np.zeros_like(dir_binary)
-# combined[((gradx == 1) & (grady == 1)) | ((mag_binary == 1) & (dir_binary == 1))] = 1
-#
-# color_binary = np.dstack((np.zeros_like(combined), combined, hls_binary))
+    # Threshold color channel
+    s_binary = np.zeros_like(s_channel)
+    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+    # Stack each channel
+    # Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
+    # be beneficial to replace this channel with something else.
+    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, s_binary))
+    return color_binary
 
-
-# TODO Finish up the pipeline
-# def pipeline(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
-#     img = np.copy(img)
-#     # Convert to HSV color space and separate the V channel
-#     hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
-#     l_channel = hsv[:, :, 1]
-#     s_channel = hsv[:, :, 2]
-#     # Sobel x
-#     sobelx = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0)  # Take the derivative in x
-#     abs_sobelx = np.absolute(sobelx)  # Absolute x derivative to accentuate lines away from horizontal
-#     scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
-#
-#     # Threshold x gradient
-#     sxbinary = np.zeros_like(scaled_sobel)
-#     sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
-#
-#     # Threshold color channel
-#     s_binary = np.zeros_like(s_channel)
-#     s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
-#     # Stack each channel
-#     # Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
-#     # be beneficial to replace this channel with something else.
-#     color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, s_binary))
-#     return color_binary
-#
-#
-# result = pipeline(image)
 
 def region_of_interest(img):
     """
@@ -221,25 +220,160 @@ def region_of_interest(img):
     return masked_image
 
 
-# camera_calibration("camera_cal/calibration*.jpg")
-# undistorted = cal_undistort(images, objpoints, imgpoints)
+def lane_detection(binary_warped, nwindows=9):
+    # Assuming you have created a warped binary image called "binary_warped"
+    # Take a histogram of the bottom half of the image
+    histogram = np.sum(binary_warped[binary_warped.shape[0] / 2:, :], axis=0)
+    # Create an output image to draw on and  visualize the result
+    out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
+    # Find the peak of the left and right halves of the histogram
+    # These will be the starting point for the left and right lines
+    midpoint = np.int(histogram.shape[0] / 2)
+    leftx_base = np.argmax(histogram[:midpoint])
+    rightx_base = np.argmax(histogram[midpoint:]) + midpoint
 
-test_image = mpimg.imread('test_images/test5.jpg')
+    # Set height of windows
+    window_height = np.int(binary_warped.shape[0] / nwindows)
+    # Identify the x and y positions of all nonzero pixels in the image
+    nonzero = binary_warped.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+    # Current positions to be updated for each window
+    leftx_current = leftx_base
+    rightx_current = rightx_base
+    # Set the width of the windows +/- margin
+    margin = 100
+    # Set minimum number of pixels found to recenter window
+    minpix = 50
+    # Create empty lists to receive left and right lane pixel indices
+    left_lane_inds, right_lane_inds = [], []
 
-img_masked = region_of_interest(test_image)
+    # Step through the windows one by one
+    for window in range(nwindows):
+        # Identify window boundaries in x and y (and right and left)
+        win_y_low = binary_warped.shape[0] - (window + 1) * window_height
+        win_y_high = binary_warped.shape[0] - window * window_height
+        win_xleft_low = leftx_current - margin
+        win_xleft_high = leftx_current + margin
+        win_xright_low = rightx_current - margin
+        win_xright_high = rightx_current + margin
+        # Draw the windows on the visualization image
+        cv2.rectangle(out_img, (win_xleft_low, win_y_low), (win_xleft_high, win_y_high), (0, 255, 0), 2)
+        cv2.rectangle(out_img, (win_xright_low, win_y_low), (win_xright_high, win_y_high), (0, 255, 0), 2)
+        # Identify the nonzero pixels in x and y within the window
+        good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (
+            nonzerox < win_xleft_high)).nonzero()[0]
+        good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (
+            nonzerox < win_xright_high)).nonzero()[0]
+        # Append these indices to the lists
+        left_lane_inds.append(good_left_inds)
+        right_lane_inds.append(good_right_inds)
+        # If you found > minpix pixels, recenter next window on their mean position
+        if len(good_left_inds) > minpix:
+            leftx_current = np.int(np.mean(nonzerox[good_left_inds]))
+        if len(good_right_inds) > minpix:
+            rightx_current = np.int(np.mean(nonzerox[good_right_inds]))
 
-img_bird_view, M, Minv = warper(img_masked)
+    # Concatenate the arrays of indices
+    left_lane_inds = np.concatenate(left_lane_inds)
+    right_lane_inds = np.concatenate(right_lane_inds)
 
-plt.imshow(img_masked)
-plt.show()
-plt.imshow(img_bird_view)
-plt.show()
+    # Extract left and right line pixel positions
+    leftx = nonzerox[left_lane_inds]
+    lefty = nonzeroy[left_lane_inds]
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
 
-# load pickle data
-calib_pickle = pickle.load(open('calibration.p', 'rb'))
-mtx = calib_pickle['mtx']
-dist = calib_pickle['dist']
+    # Fit a second order polynomial to each
+    left_fit = np.polyfit(lefty, leftx, 2)
+    right_fit = np.polyfit(righty, rightx, 2)
+    return left_fit, right_fit
 
-# TODO define function for lane detection
+
+def generate_values(binary_warped, left_fit, right_fit):
+    # Generate x and y values
+    ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
+    leftx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+    rightx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+    return ploty, leftx, rightx
+
+
+def calculate_curvature(ploty, leftx, rightx):
+    y_eval = np.max(ploty)
+    # Define conversions in x and y from pixels space to meters
+    ym_per_pix = 30 / 720  # meters per pixel in y dimension
+    xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
+
+    # Fit new polynomials to x,y in world space
+    left_fit_cr = np.polyfit(ploty * ym_per_pix, leftx * xm_per_pix, 2)
+    right_fit_cr = np.polyfit(ploty * ym_per_pix, rightx * xm_per_pix, 2)
+    # Calculate the new radii of curvature
+    left_curverad = ((1 + (2 * left_fit_cr[0] * y_eval * ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
+        2 * left_fit_cr[0])
+    right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
+        2 * right_fit_cr[0])
+    # Now our radius of curvature is in meters
+    print(left_curverad, 'm', right_curverad, 'm')
+    # Example values: 632.1 m    626.2 m
+
 
 # TODO test on video stream
+
+def video_pipeline(img, save=False):
+    # Check if calibration picke file exists and if not calibrate the camera
+    if not Path("calibration.p").is_file():
+        # Calibrate Camera
+        camera_calibration("camera_cal/calibration*.jpg")
+
+    calib_pickle = pickle.load(open('calibration.p', 'rb'))
+    mtx = calib_pickle['mtx']
+    dist = calib_pickle['dist']
+
+    # undistort the input image
+    img = cv2.undistort(img, mtx, dist, None, mtx)
+    if save:
+        mpimg.imsave("output_images/pipeline_test_undistorted.jpg", img)
+
+    # mask the undistorted image
+    masked_img = region_of_interest(img)
+    if save:
+        mpimg.imsave("output_images/pipeline_test_masked.jpg", masked_img)
+
+    # convert image to a colored binary image
+    # TODO combined_threshold is not working
+    color_binary_img = hls_with_sobelx(masked_img)
+    if save:
+        mpimg.imsave("output_images/pipeline_test_color_binary.jpg", color_binary_img)
+
+    # warp image to birds-eye view
+    warped_img, M, Minv = warper(color_binary_img)
+    if save:
+        mpimg.imsave("output_images/pipeline_test_warped.jpg", warped_img)
+
+    # detect the lane lines
+    left_fit, right_fit = lane_detection(warped_img, nwindows=9)
+    ploty, leftx, rightx = generate_values(warped_img, left_fit, right_fit)
+    if save:
+        plt.imshow(warped_img)
+        plt.plot(leftx, ploty, color='yellow')
+        plt.plot(rightx, ploty, color='yellow')
+        plt.savefig("output_images/pipeline_test_lane_detection.png")
+
+    # calculate the curvature
+    calculate_curvature(ploty, leftx, rightx)
+
+    # TODO drawlines on picture
+    # TODO warp it back to normal view
+
+    return
+
+
+# Choose a Sobel kernel size and the number of sliding windows
+ksize = 3
+
+# load test image
+test_image = mpimg.imread('test_images/test5.jpg')
+video_pipeline(test_image, True)
+
+left_lane = Line()
+right_lane = Line()
