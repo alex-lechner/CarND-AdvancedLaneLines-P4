@@ -149,25 +149,24 @@ def hls_threshold(img, channel='s', thresh=(0, 255)):
 
 def combined_threshold(img, kernel_size=3):
     # Apply each of the thresholding functions
-    gradx = abs_sobel_thresh(img, orient='x', sobel_kernel=kernel_size)
-    grady = abs_sobel_thresh(img, orient='y', sobel_kernel=kernel_size)
-    mag_binary = mag_thresh(img, sobel_kernel=kernel_size)
-    dir_binary = dir_threshold(img, sobel_kernel=kernel_size)
-    hls_binary = hls_threshold(img)
+    gradx = abs_sobel_thresh(img, orient='x', sobel_kernel=kernel_size, thresh=(20, 255), convert_gray=True)
+    grady = abs_sobel_thresh(img, orient='y', sobel_kernel=kernel_size, thresh=(20, 255), convert_gray=True)
+    s_channel = hls_threshold(img, thresh=(10, 230))
+    mag_binary = mag_thresh(s_channel, sobel_kernel=kernel_size, thresh=(30, 180))
+    dir_binary = dir_threshold(s_channel, sobel_kernel=9, thresh=(0.7, 1.4))
 
     combined = np.zeros_like(dir_binary)
     combined[((gradx == 1) & (grady == 1)) | ((mag_binary == 1) & (dir_binary == 1))] = 1
 
-    color_binary = np.dstack((np.zeros_like(combined), combined, hls_binary))
-    return color_binary
+    return combined
 
 
 def hls_with_sobelx(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     img = np.copy(img)
     # Convert to HSV color space and separate the V channel
-    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
-    l_channel = hsv[:, :, 1]
-    s_channel = hsv[:, :, 2]
+    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
+    l_channel = hls[:, :, 1]
+    s_channel = hls[:, :, 2]
     # Sobel x
     sxbinary = abs_sobel_thresh(l_channel, orient='x', thresh=sx_thresh)
 
@@ -223,7 +222,7 @@ def region_of_interest(img):
 def lane_detection(binary_warped, nwindows=9):
     # Assuming you have created a warped binary image called "binary_warped"
     # Take a histogram of the bottom half of the image
-    histogram = np.sum(binary_warped[binary_warped.shape[0] / 2:, :], axis=0)
+    histogram = np.sum(binary_warped[binary_warped.shape[0] // 2:, :], axis=0)
     # Create an output image to draw on and  visualize the result
     out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
     # Find the peak of the left and right halves of the histogram
@@ -318,7 +317,6 @@ def calculate_curvature(ploty, leftx, rightx):
 
 
 # TODO test on video stream
-
 def video_pipeline(img, save=False):
     # Check if calibration picke file exists and if not calibrate the camera
     if not Path("calibration.p").is_file():
@@ -340,21 +338,25 @@ def video_pipeline(img, save=False):
         mpimg.imsave("output_images/pipeline_test_masked.jpg", masked_img)
 
     # convert image to a colored binary image
-    # TODO combined_threshold is not working
-    color_binary_img = hls_with_sobelx(masked_img)
+    color_binary_hls_img = hls_with_sobelx(masked_img)
     if save:
-        mpimg.imsave("output_images/pipeline_test_color_binary.jpg", color_binary_img)
+        mpimg.imsave("output_images/pipeline_test_color_binary_hls.jpg", color_binary_hls_img)
+
+    # convert image to a colored binary image
+    color_binary_combined_img = combined_threshold(masked_img, kernel_size=5)
+    if save:
+        mpimg.imsave("output_images/pipeline_test_color_binary_combined.jpg", color_binary_combined_img, cmap='gray')
 
     # warp image to birds-eye view
-    warped_img, M, Minv = warper(color_binary_img)
+    warped_img, M, Minv = warper(color_binary_combined_img)
     if save:
-        mpimg.imsave("output_images/pipeline_test_warped.jpg", warped_img)
+        mpimg.imsave("output_images/pipeline_test_warped.jpg", warped_img, cmap='gray')
 
     # detect the lane lines
     left_fit, right_fit = lane_detection(warped_img, nwindows=9)
     ploty, leftx, rightx = generate_values(warped_img, left_fit, right_fit)
     if save:
-        plt.imshow(warped_img)
+        plt.imshow(warped_img, cmap='gray')
         plt.plot(leftx, ploty, color='yellow')
         plt.plot(rightx, ploty, color='yellow')
         plt.savefig("output_images/pipeline_test_lane_detection.png")
@@ -373,7 +375,6 @@ ksize = 3
 
 # load test image
 test_image = mpimg.imread('test_images/test5.jpg')
-video_pipeline(test_image, True)
-
 left_lane = Line()
 right_lane = Line()
+video_pipeline(test_image, True)
