@@ -43,6 +43,8 @@ I then used the output `objpoints` and `imgpoints` to compute the camera calibra
 
 ![alt text][image9] ![alt text][image10]
 
+(The image above is distorted and the image below is undistorted)
+
 ### Pipeline (single images)
 
 #### 1. Provide an example of a distortion-corrected image.
@@ -51,7 +53,7 @@ To demonstrate this step, I will describe how I apply the distortion correction 
 
 ![alt text][image3] ![alt text][image1]
 
-(The left image is distorted and the right image is undistorted)
+(The image above is distorted and the image below is undistorted)
 
 Afterwards I masked my image to only have the region of interest:
 
@@ -63,7 +65,7 @@ I used a combination of color and gradient thresholds to generate a binary image
 
 ![alt text][image4] ![alt text][image5]
 
-(The left image is the output from ```hls_with_sobelx()``` and the right image is the output from```combined_threshold()```)
+(The image above is the output from ```hls_with_sobelx()``` and the image below is the output from```combined_threshold()```)
 
 As you can see the left image does a pretty good job by detecting the lane lines so that's why I've used ```hls_with_sobelx()``` for the image processing step.
 
