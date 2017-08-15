@@ -156,8 +156,11 @@ def hls_threshold(img, channel='s', thresh=(0, 255)):
 
 def combined_threshold(img, kernel_size=3):
     # Apply each of the thresholding functions
-    gradx = abs_sobel_thresh(img, orient='x', sobel_kernel=kernel_size, thresh=(20, 255), convert_gray=True)
-    grady = abs_sobel_thresh(img, orient='y', sobel_kernel=kernel_size, thresh=(20, 255), convert_gray=True)
+    # l_channel = hls_threshold(img, channel='s', thresh=(10, 100))
+    # plt.imshow(l_channel, cmap='gray')
+    # plt.show()
+    gradx = abs_sobel_thresh(img, orient='x', sobel_kernel=kernel_size, thresh=(20, 100), convert_gray=True)
+    grady = abs_sobel_thresh(img, orient='y', sobel_kernel=kernel_size, thresh=(20, 100), convert_gray=True)
     s_channel = hls_threshold(img, thresh=(10, 230))
     mag_binary = mag_thresh(s_channel, sobel_kernel=kernel_size, thresh=(30, 180))
     dir_binary = dir_threshold(s_channel, sobel_kernel=9, thresh=(0.7, 1.4))
@@ -168,14 +171,14 @@ def combined_threshold(img, kernel_size=3):
     return combined
 
 
-def hls_with_sobelx(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
+def hls_with_sobelx(img, kernel_size=3, s_thresh=(170, 250), sx_thresh=(20, 100)):
     img = np.copy(img)
     # Convert to HSV color space and separate the V channel
     hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
     l_channel = hls[:, :, 1]
     s_channel = hls[:, :, 2]
     # Sobel x
-    sxbinary = abs_sobel_thresh(l_channel, orient='x', thresh=sx_thresh)
+    sxbinary = abs_sobel_thresh(l_channel, orient='x', sobel_kernel=kernel_size, thresh=sx_thresh)
 
     # Threshold color channel
     s_binary = np.zeros_like(s_channel)
@@ -183,8 +186,10 @@ def hls_with_sobelx(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     # Stack each channel
     # Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
     # be beneficial to replace this channel with something else.
-    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, s_binary))
-    return color_binary
+    # color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, s_binary))
+    combined = np.zeros_like(s_channel)
+    combined[(sxbinary == 1) | (s_binary == 1)] = 1
+    return combined
 
 
 def region_of_interest(img):
@@ -390,20 +395,18 @@ def video_pipeline(img, ksize=5, nwindows=9, save=False):
     if save:
         mpimg.imsave("output_images/pipeline_test_masked.jpg", masked_img)
 
-    # TODO Maybe combine both color_binary_hls_img & color_binary_combined_img?
-    # convert image to a colored binary image
-    color_binary_hls_img = hls_with_sobelx(masked_img)
+    # convert image to a colored binary image (hls version)
+    color_binary_hls_img = hls_with_sobelx(masked_img, kernel_size=ksize)
     if save:
-        mpimg.imsave("output_images/pipeline_test_color_binary_hls.jpg", color_binary_hls_img)
+        mpimg.imsave("output_images/pipeline_test_color_binary_hls.jpg", color_binary_hls_img, cmap='gray')
 
-    # FIXME better lane deteciont
-    # convert image to a colored binary image
+    # convert image to a colored binary image (combined dir, mag and sobel)
     color_binary_combined_img = combined_threshold(masked_img, kernel_size=ksize)
     if save:
         mpimg.imsave("output_images/pipeline_test_color_binary_combined.jpg", color_binary_combined_img, cmap='gray')
 
     # warp image to birds-eye view
-    warped_img, M, Minv = warper(color_binary_combined_img)
+    warped_img, M, Minv = warper(color_binary_hls_img)
     if save:
         mpimg.imsave("output_images/pipeline_test_warped.jpg", warped_img, cmap='gray')
 
@@ -444,16 +447,19 @@ def video_pipeline(img, ksize=5, nwindows=9, save=False):
     if save:
         mpimg.imsave("output_images/pipeline_test_result.jpg", result_img)
     else:
-        # FIXME string concatenation not working
-        text = "Left curvature: {:.2f}m \n".format(left_curvrad)
-        text += "Right curvature: {:.2f}m \n".format(right_curvrad)
+        text = "Left curvature: {:.2f}m\n".format(left_curvrad)
+        text += "Right curvature: {:.2f}m\n".format(right_curvrad)
         if offset > 0:
             text += "Distance from left: {:.2f}m".format(offset)
         elif offset < 0:
             text += "Distance from right: {:.2f}m".format(offset)
         else:
             text += "Vehicle is at the center between lane lines."
-        result_img = cv2.putText(result_img, text, (850, 45), cv2.FONT_HERSHEY_COMPLEX, 1, [255, 255, 255])
+        # Hack because OpenCV doesN#t support \n character in putText()
+        y0, dy = 50, 48
+        for i, line in enumerate(text.split('\n')):
+            y = y0 + i * dy
+            cv2.putText(result_img, line, (50, y), cv2.FONT_HERSHEY_COMPLEX, 1, [255, 255, 255])
 
     return result_img
 
@@ -471,4 +477,4 @@ result = video_pipeline(test_image, ksize=ksize, nwindows=nwindows, save=True)
 video_output_file = 'project_video_output.mp4'
 video_input_file = VideoFileClip("./project_video.mp4")
 video_output = video_input_file.fl_image(video_pipeline)
-video_output.write_videofile(video_output_file)
+video_output.write_videofile(video_output_file, audio=False)
