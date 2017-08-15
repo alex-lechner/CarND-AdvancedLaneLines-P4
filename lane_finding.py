@@ -6,6 +6,7 @@ import cv2
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
+from moviepy.editor import VideoFileClip
 
 from Line import Line
 
@@ -64,6 +65,12 @@ def warper(img):
     Minv = cv2.getPerspectiveTransform(dst, src)
     warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_NEAREST)
     return warped, M, Minv
+
+
+def unwarper(img, Minv):
+    img_size = (img.shape[1], img.shape[0])
+    unwarped = cv2.warpPerspective(img, Minv, img_size, flags=cv2.INTER_NEAREST)
+    return unwarped
 
 
 def abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(0, 255), convert_gray=False):
@@ -270,8 +277,15 @@ def lane_detection(binary_warped, nwindows=9):
         # If you found > minpix pixels, recenter next window on their mean position
         if len(good_left_inds) > minpix:
             leftx_current = np.int(np.mean(nonzerox[good_left_inds]))
+            left_lane.detected = True
+        else:
+            left_lane.detected = False
+
         if len(good_right_inds) > minpix:
             rightx_current = np.int(np.mean(nonzerox[good_right_inds]))
+            right_lane.detected = True
+        else:
+            right_lane.detected = False
 
     # Concatenate the arrays of indices
     left_lane_inds = np.concatenate(left_lane_inds)
@@ -283,6 +297,32 @@ def lane_detection(binary_warped, nwindows=9):
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
 
+    # Fit a second order polynomial to each
+    left_fit = np.polyfit(lefty, leftx, 2)
+    right_fit = np.polyfit(righty, rightx, 2)
+    return left_fit, right_fit
+
+
+def lane_detection_from_previous(binary_warped):
+    left_fit, right_fit = left_lane.current_fit, right_lane.current_fit
+    # Assume you now have a new warped binary image
+    # from the next frame of video (also called "binary_warped")
+    # It's now much easier to find line pixels!
+    nonzero = binary_warped.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+    margin = 100
+    left_lane_inds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] - margin)) & (
+        nonzerox < (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] + margin)))
+    right_lane_inds = (
+        (nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin)) & (
+            nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin)))
+
+    # Again, extract left and right line pixel positions
+    leftx = nonzerox[left_lane_inds]
+    lefty = nonzeroy[left_lane_inds]
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
     # Fit a second order polynomial to each
     left_fit = np.polyfit(lefty, leftx, 2)
     right_fit = np.polyfit(righty, rightx, 2)
@@ -311,13 +351,26 @@ def calculate_curvature(ploty, leftx, rightx):
         2 * left_fit_cr[0])
     right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
         2 * right_fit_cr[0])
-    # Now our radius of curvature is in meters
-    print(left_curverad, 'm', right_curverad, 'm')
-    # Example values: 632.1 m    626.2 m
+
+    offset = ((leftx[-1] + rightx[-1]) / 2 - 640) * xm_per_pix
+    return left_curverad, right_curverad, offset
 
 
-# TODO test on video stream
-def video_pipeline(img, save=False):
+def draw_lines(warped_img, leftx, rightx, ploty):
+    warp_zero = np.zeros_like(warped_img).astype(np.uint8)
+    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([leftx, ploty]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([rightx, ploty])))])
+    pts = np.hstack((pts_left, pts_right))
+
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+    return color_warp
+
+
+def video_pipeline(img, ksize=5, nwindows=9, save=False):
     # Check if calibration picke file exists and if not calibrate the camera
     if not Path("calibration.p").is_file():
         # Calibrate Camera
@@ -328,22 +381,24 @@ def video_pipeline(img, save=False):
     dist = calib_pickle['dist']
 
     # undistort the input image
-    img = cv2.undistort(img, mtx, dist, None, mtx)
+    undistorted_img = cv2.undistort(img, mtx, dist, None, mtx)
     if save:
-        mpimg.imsave("output_images/pipeline_test_undistorted.jpg", img)
+        mpimg.imsave("output_images/pipeline_test_undistorted.jpg", undistorted_img)
 
     # mask the undistorted image
-    masked_img = region_of_interest(img)
+    masked_img = region_of_interest(undistorted_img)
     if save:
         mpimg.imsave("output_images/pipeline_test_masked.jpg", masked_img)
 
+    # TODO Maybe combine both color_binary_hls_img & color_binary_combined_img?
     # convert image to a colored binary image
     color_binary_hls_img = hls_with_sobelx(masked_img)
     if save:
         mpimg.imsave("output_images/pipeline_test_color_binary_hls.jpg", color_binary_hls_img)
 
+    # FIXME better lane deteciont
     # convert image to a colored binary image
-    color_binary_combined_img = combined_threshold(masked_img, kernel_size=5)
+    color_binary_combined_img = combined_threshold(masked_img, kernel_size=ksize)
     if save:
         mpimg.imsave("output_images/pipeline_test_color_binary_combined.jpg", color_binary_combined_img, cmap='gray')
 
@@ -353,28 +408,67 @@ def video_pipeline(img, save=False):
         mpimg.imsave("output_images/pipeline_test_warped.jpg", warped_img, cmap='gray')
 
     # detect the lane lines
-    left_fit, right_fit = lane_detection(warped_img, nwindows=9)
+    if left_lane.detected or right_lane.detected:
+        left_fit, right_fit = lane_detection_from_previous(warped_img)
+    else:
+        left_fit, right_fit = lane_detection(warped_img, nwindows=nwindows)
+
+    left_lane.current_fit, right_lane.current_fit = left_fit, right_fit
+
+    # generate x and y values
     ploty, leftx, rightx = generate_values(warped_img, left_fit, right_fit)
     if save:
+        plt.axis('off')
+        plt.tick_params(axis='both', left='off', top='off', right='off', bottom='off', labelleft='off', labeltop='off',
+                        labelright='off', labelbottom='off')
         plt.imshow(warped_img, cmap='gray')
         plt.plot(leftx, ploty, color='yellow')
         plt.plot(rightx, ploty, color='yellow')
-        plt.savefig("output_images/pipeline_test_lane_detection.png")
+        plt.savefig("output_images/pipeline_test_lane_detection.jpg", bbox_inches='tight', pad_inches=0)
+        plt.close()
+
+    left_lane.allx, right_lane.allx = leftx, rightx
+    left_lane.ally = right_lane.ally = ploty
 
     # calculate the curvature
-    calculate_curvature(ploty, leftx, rightx)
+    left_curvrad, right_curvrad, offset = calculate_curvature(ploty, leftx, rightx)
+    left_lane.radius_of_curvature, right_lane.radius_of_curvature = left_curvrad, right_curvrad
 
-    # TODO drawlines on picture
-    # TODO warp it back to normal view
+    # Create an image to draw the lines on
+    color_warp = draw_lines(warped_img, leftx, rightx, ploty)
 
-    return
+    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    unwarped_img = unwarper(color_warp, Minv)
+    # Combine the result with the original image
+    result_img = cv2.addWeighted(undistorted_img, 1, unwarped_img, 0.3, 0)
+    if save:
+        mpimg.imsave("output_images/pipeline_test_result.jpg", result_img)
+    else:
+        # FIXME string concatenation not working
+        text = "Left curvature: {:.2f}m \n".format(left_curvrad)
+        text += "Right curvature: {:.2f}m \n".format(right_curvrad)
+        if offset > 0:
+            text += "Distance from left: {:.2f}m".format(offset)
+        elif offset < 0:
+            text += "Distance from right: {:.2f}m".format(offset)
+        else:
+            text += "Vehicle is at the center between lane lines."
+        result_img = cv2.putText(result_img, text, (850, 45), cv2.FONT_HERSHEY_COMPLEX, 1, [255, 255, 255])
+
+    return result_img
 
 
 # Choose a Sobel kernel size and the number of sliding windows
-ksize = 3
+ksize = 5
+nwindows = 9
 
 # load test image
 test_image = mpimg.imread('test_images/test5.jpg')
 left_lane = Line()
 right_lane = Line()
-video_pipeline(test_image, True)
+result = video_pipeline(test_image, ksize=ksize, nwindows=nwindows, save=True)
+
+video_output_file = 'project_video_output.mp4'
+video_input_file = VideoFileClip("./project_video.mp4")
+video_output = video_input_file.fl_image(video_pipeline)
+video_output.write_videofile(video_output_file)
